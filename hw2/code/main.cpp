@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace cv;
 using namespace std;
@@ -16,11 +17,6 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   
   float a[3][3] = {{1,2,3},{4,5,6},{7,8,9}};
   Mat A(3, 3, CV_32FC1, a);
-  Mat Sob, Mul;
-  Scalar summary = sum(A);
-  cout << "sum = " << summary[0] << endl;
-  A.at<float>(0, 0) = 100;
-  cout << A << endl;
 
   /*
     Create dx, dy of images by using gaussian blur to reduce noise,
@@ -37,10 +33,10 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   // Sobel only support uchar operation
   grayImage.convertTo(grayImage, CV_8U, 255, 0) ; 
 
-  Sobel(grayImage, DX,  -1, 1, 0, 3, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DX,  -1, 1, 0, 5, scale, delta, BORDER_DEFAULT);
   convertScaleAbs(DX, DX);
   
-  Sobel(grayImage, DY,  -1, 0, 1, 3, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DY,  -1, 0, 1, 5, scale, delta, BORDER_DEFAULT);
   convertScaleAbs(DY, DY);
    
   // Calculate border image, just for debug
@@ -52,7 +48,6 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   radMap = Mat::zeros(image.rows, image.cols, CV_32FC1); 
   for (int i = winSize; i < image.rows - winSize; ++i) {
     for (int j = winSize; j < image.cols - winSize; ++j) {
-      
       // Calculate the window position and size in images
       int length = winSize * 2 + 1;
       int top = i - winSize;
@@ -65,6 +60,10 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
       multiply(dx, dx, dxdx);
       multiply(dy, dy, dydy);
       multiply(dx, dy, dxdy);
+      
+      GaussianBlur(dxdx, dxdx, Size(3,3), 0, 0, BORDER_DEFAULT);
+      GaussianBlur(dydy, dydy, Size(3,3), 0, 0, BORDER_DEFAULT);
+      GaussianBlur(dxdy, dxdy, Size(3,3), 0, 0, BORDER_DEFAULT);
 
       // Sum of all DX^2, DY^2, DXDY in current window
       float sumDx = sum(dxdx)[0];
@@ -99,9 +98,64 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   return radMap;
 }
 
+/*
+  Type of element in radMap is float 
+*/
+vector<Point> findFeaturePoints(Mat &radMap) {
+  double min, max, average;
+  vector<Point> pointVec;
+  Mat KillMap = Mat::zeros(radMap.rows, radMap.cols, CV_8UC1); 
+   
+  // minMaxLoc(radMap, &min, &max);
+  float sumOfRadmap = sum(radMap)[0];
+  float threshold = sumOfRadmap / radMap.rows / radMap.cols;
+
+  for (int i = 1; i < radMap.rows - 1; ++i) {
+    for (int j = 1; j < radMap.cols - 1; ++j) {
+      if (radMap.at<float>(i, j) > threshold) {
+        // If value in other pixel is lager than one in current pixel,
+        // kill current pixel
+        float wMin, wMax;
+        int top = i - 1;
+        int left = j - 1;
+        int length = 3;
+        // Mat dx = DX(Rect(left, top, length, length));
+        bool isLarger = false;
+        Mat window = radMap(Rect(left, top, length, length));
+        for (int u = 0; u < length; ++u) {
+          for (int v = 0; v < length; ++v) {
+            if (u == 1 && v == 1) {
+              continue;
+            } 
+            if (window.at<float>(u, v) < window.at<float>(1, 1)) {
+              isLarger = true;
+              break;
+            }
+          }
+        }
+              
+        if (!isLarger) {
+          // If current pixel is local minimum,
+          // we should kill and delete this pixel.
+          KillMap.at<uchar>(i, j) = 1;
+        }
+      }    
+    }
+  }
+  
+  // Extract feature points
+  pointVec.clear();
+  for (int i = 1; i < KillMap.rows; ++i)
+    for (int j = 1; j < KillMap.cols; ++j)
+      if (KillMap.at<uchar>(i, j) == 1)
+        pointVec.push_back(Point(i, j));
+  return pointVec;
+}
+
 int main( int argc, char** argv )
 {
-  String imageName( "../../data/parrington/prtn01.jpg"); // by default
+  // String imageName( "../../data/parrington/prtn03.jpg"); // by default
+  String imageName( "../../data/grail/grail02.jpg"); // by default
   if( argc > 1)
   {
     imageName = argv[1];
@@ -109,24 +163,28 @@ int main( int argc, char** argv )
   
   Mat inImage, image;
   inImage = imread( imageName, IMREAD_COLOR ); // Read the file
-  inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
- 
-  Mat radMap;
-  radMap = getRadianceMap(image, 1);
-   
-  cout << inImage.at<Vec3b>(0,0) << endl;
-  cout << image.at<Vec3f>(0,0) << endl;
-   
-  if( radMap.empty() )                      // Check for invalid input
-  {
+  if(inImage.empty()) {
     cout <<  "Could not open or find the image" << std::endl ;
     return -1;
   }
+
+  inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
+ 
+  Mat radMap;
+  vector<Point> pointVec;
+  radMap = getRadianceMap(image, 2, 0.04);
+  pointVec = findFeaturePoints(radMap);
   
+  for (int i = 0; i < pointVec.size(); ++i) {
+    int x = pointVec[i].x;
+    int y = pointVec[i].y;
+    inImage.at<Vec3b>(x, y)[2] = 255;
+  }
+   
   Mat outputMat, grayImage, cmImg;
   cvtColor(image, grayImage, CV_BGR2GRAY);
   
-  double min, max;
+  double min, max, average;
   minMaxLoc(radMap, &min, &max);
   cout << "Min & Max = " << min << " " << max << endl;
   normalize(radMap, radMap, 1.0, 0.0, NORM_MINMAX);
@@ -135,15 +193,13 @@ int main( int argc, char** argv )
   cout << "Min & Max = " << min << " " << max << endl;
   
   applyColorMap(radMap, cmImg, COLORMAP_JET);
-  cout << cmImg.channels() << " " << cmImg.type() << " " << cmImg.rows << " " << cmImg.cols << endl;
-  cout << image.channels() << " " << image.type() << " " << image.rows << " " << image.cols << endl;
-  
-  
+
+  radMap.convertTo(radMap, CV_32F, 1.0/255, 0); 
   Mat matArray[] = {cmImg, inImage};
   hconcat(matArray, 2, outputMat);
 
   // namedWindow( "Display window", CV_WINDOW_AUTOSIZE); 
-  imshow( "Display window", outputMat );                // Show our image inside it.
+  imshow( "Display window", outputMat );
   waitKey(0); // Wait for a keystroke in the window
   
   return 0;
