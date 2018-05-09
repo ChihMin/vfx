@@ -10,6 +10,53 @@
 using namespace cv;
 using namespace std;
 
+class ImageContainer {
+public:
+  ImageContainer() { }
+  ImageContainer(const Mat& _image, const Mat& _radMap, const vector<Point>& _pointVec) {
+    _image.copyTo(this->image);
+    _radMap.copyTo(this->radMap);
+    this->pointVec.assign(_pointVec.begin(), _pointVec.end());
+  }
+  
+  Mat getImage() { return this->image; }
+  Mat getRadMap() { return this->radMap; }
+  vector<Point> getPoints() { return this->pointVec;}
+   
+  Mat getFeatureImage() {
+    Mat newImage;
+    this->image.copyTo(newImage);
+    for (int i = 0; i < this->pointVec.size(); ++i) {
+      Point point = pointVec[i];
+      int x = point.x;
+      int y = point.y;
+      newImage.at<Vec3b>(x, y)[0] = 0;
+      newImage.at<Vec3b>(x, y)[1] = 0;
+      newImage.at<Vec3b>(x, y)[2] = 255;
+    }
+    return newImage; 
+  }
+
+  Mat getResponseMap() {
+    double min, max;
+    Mat normMap, cmImg;
+    
+    minMaxLoc(this->radMap, &min, &max);
+    normalize(this->radMap, normMap, 1.0, 0.0, NORM_MINMAX);
+    minMaxLoc(normMap, &min, &max);
+    normMap.convertTo(normMap, CV_8U, 255, 0);
+    minMaxLoc(normMap, &min, &max);
+    applyColorMap(normMap, cmImg, COLORMAP_JET);
+    
+    return cmImg;
+  }
+  
+private:
+  Mat image;
+  Mat radMap;
+  vector<Point>pointVec;
+};
+
 Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   Mat radMap, grayImage;
   cvtColor(image, grayImage, CV_BGR2GRAY);
@@ -101,7 +148,7 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
 /*
   Type of element in radMap is float 
 */
-vector<Point> findFeaturePoints(Mat &radMap) {
+vector<Point> findFeaturePoints(const Mat &radMap) {
   double min, max, average;
   vector<Point> pointVec;
   Mat KillMap = Mat::zeros(radMap.rows, radMap.cols, CV_8UC1); 
@@ -149,53 +196,41 @@ vector<Point> findFeaturePoints(Mat &radMap) {
     for (int j = 1; j < KillMap.cols; ++j)
       if (KillMap.at<uchar>(i, j) == 1)
         pointVec.push_back(Point(i, j));
+  
   return pointVec;
 }
 
 int main( int argc, char** argv )
 {
-  // String imageName( "../../data/parrington/prtn03.jpg"); // by default
-  String imageName( "../../data/grail/grail02.jpg"); // by default
-  if( argc > 1)
-  {
-    imageName = argv[1];
+/*
+  if (argc < 4) {
+    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${NUM_OF_IMAGES}" << endl;
+    return -1;
   }
-  
+*/
+  String imageName( "../../data/grail/grail02.jpg"); // by default
+
   Mat inImage, image;
   inImage = imread( imageName, IMREAD_COLOR ); // Read the file
   if(inImage.empty()) {
     cout <<  "Could not open or find the image" << std::endl ;
     return -1;
   }
-
-  inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
  
   Mat radMap;
   vector<Point> pointVec;
+  inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
   radMap = getRadianceMap(image, 2, 0.04);
   pointVec = findFeaturePoints(radMap);
   
-  for (int i = 0; i < pointVec.size(); ++i) {
-    int x = pointVec[i].x;
-    int y = pointVec[i].y;
-    inImage.at<Vec3b>(x, y)[2] = 255;
-  }
+  ImageContainer newImage(inImage, radMap, pointVec); 
+  inImage = newImage.getFeatureImage();
+  Mat JetColorMap = newImage.getResponseMap();
    
-  Mat outputMat, grayImage, cmImg;
+  Mat outputMat, grayImage;
   cvtColor(image, grayImage, CV_BGR2GRAY);
   
-  double min, max, average;
-  minMaxLoc(radMap, &min, &max);
-  cout << "Min & Max = " << min << " " << max << endl;
-  normalize(radMap, radMap, 1.0, 0.0, NORM_MINMAX);
-  radMap.convertTo(radMap, CV_8U, 255, 0);
-  minMaxLoc(radMap, &min, &max);
-  cout << "Min & Max = " << min << " " << max << endl;
-  
-  applyColorMap(radMap, cmImg, COLORMAP_JET);
-
-  radMap.convertTo(radMap, CV_32F, 1.0/255, 0); 
-  Mat matArray[] = {cmImg, inImage};
+  Mat matArray[] = {JetColorMap, inImage};
   hconcat(matArray, 2, outputMat);
 
   // namedWindow( "Display window", CV_WINDOW_AUTOSIZE); 
