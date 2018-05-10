@@ -6,6 +6,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cstring>
+#include <cstdlib>
+#include <cmath>
 
 using namespace cv;
 using namespace std;
@@ -19,8 +22,19 @@ public:
     this->pointVec.assign(_pointVec.begin(), _pointVec.end());
   }
   
+  ImageContainer(const Mat& _image, const Mat& _radMap, 
+                 const Mat& _Ix, const Mat& _Iy, const vector<Point>& _pointVec) {
+    _image.copyTo(this->image);
+    _radMap.copyTo(this->radMap);
+    _Ix.copyTo(this->Ix);
+    _Iy.copyTo(this->Iy);
+    this->pointVec.assign(_pointVec.begin(), _pointVec.end());
+  }
+  
   Mat getImage() { return this->image; }
   Mat getRadMap() { return this->radMap; }
+  Mat getIx() { return this->Ix; }
+  Mat getIy() { return this->Iy; }
   vector<Point> getPoints() { return this->pointVec;}
    
   Mat getFeatureImage() {
@@ -51,13 +65,56 @@ public:
     return cmImg;
   }
   
+  vector<Mat> getWindowsOfFeatures() {
+    Mat DX, DY;
+    vector<Mat> windows;
+    double min, max;
+
+    Ix.convertTo(DX, CV_32F, 1.0, 0);
+    Iy.convertTo(DY, CV_32F, 1.0, 0); 
+    minMaxLoc(Ix, &min, &max);
+    cout << min << " " << max << endl;
+    for (int i = 0; i < this->pointVec.size(); ++i) {
+      Point p = this->pointVec[i];
+      int x = p.x, y = p.y;
+      float dx = DX.at<float>(x, y);
+      float dy = DY.at<float>(x, y);
+      float root = sqrt(dx*dx + dy*dy);
+      float scale = 10.0;
+      float newX = scale * dx / root;
+      float newY = scale * dy / root;
+      float vec[] = {newX, newY};
+      Mat Vec(1, 2, CV_32FC1, vec);
+      cout << x << " "  << y << " " << Vec << " " << fastAtan2(newY, newX) << endl;
+      arrowedLine(this->image, Point(y, x), Point(int(newY+y), int(newX+x)), Scalar(255, 0, 0)); 
+      //circle(this->image, Point(y, x), 10, Scalar(0, 255, 0));
+
+      // normalize(Vec, Vec, 2.0, 0.0, NORM_MINMAX);
+      // minMaxLoc(Vec, &min, &max);
+      // cout << min << " " << max << endl;
+    }
+    
+    return windows;
+  }
+
+  void getMatchEdges(ImageContainer *otherImage) {
+    // Retreive all features from both imageA and imageB
+    // Below is algorithm:
+    // 1. Get a window of features points.
+    // 2. Rotate the feature descriptor to up.
+    // 3. Slice blocks of the images. 
+    this->getWindowsOfFeatures(); 
+    otherImage->getWindowsOfFeatures();
+  }
+  
 private:
   Mat image;
   Mat radMap;
+  Mat Ix, Iy;
   vector<Point>pointVec;
 };
 
-Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
+Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.05) {
   Mat radMap, grayImage;
   cvtColor(image, grayImage, CV_BGR2GRAY);
   grayImage.copyTo(radMap);
@@ -74,17 +131,17 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
   
   Mat blurImage, DX, DY, borderImage;
   GaussianBlur(image, blurImage, Size(3,3), 0, 0, BORDER_DEFAULT);
-  cout << blurImage.type() << " " << blurImage.channels()  << endl;
+  // cout << blurImage.type() << " " << blurImage.channels()  << endl;
   cvtColor(blurImage, grayImage, CV_BGR2GRAY);
   
   // Sobel only support uchar operation
-  grayImage.convertTo(grayImage, CV_8U, 255, 0) ; 
-
+  grayImage.convertTo(grayImage, CV_16S, 255, 0) ; 
   Sobel(grayImage, DX,  -1, 1, 0, 5, scale, delta, BORDER_DEFAULT);
-  convertScaleAbs(DX, DX);
-  
   Sobel(grayImage, DY,  -1, 0, 1, 5, scale, delta, BORDER_DEFAULT);
+  Ix = DX.clone();
+  Iy = DY.clone();
   convertScaleAbs(DY, DY);
+  convertScaleAbs(DX, DX);
    
   // Calculate border image, just for debug
   addWeighted(DX, 0.5, DY, 0.5, 0, borderImage);
@@ -148,14 +205,15 @@ Mat getRadianceMap(const Mat& image, int winSize=1, float k=0.05) {
 /*
   Type of element in radMap is float 
 */
-vector<Point> findFeaturePoints(const Mat &radMap) {
+vector<Point> findFeaturePoints(Mat &radMap) {
   double min, max, average;
   vector<Point> pointVec;
   Mat KillMap = Mat::zeros(radMap.rows, radMap.cols, CV_8UC1); 
-   
-  // minMaxLoc(radMap, &min, &max);
+  normalize(radMap, radMap, 1.0, 0.0, NORM_MINMAX);
+  minMaxLoc(radMap, &min, &max);
+  cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
-  float threshold = sumOfRadmap / radMap.rows / radMap.cols;
+  float threshold = 1.6 * sumOfRadmap / radMap.rows / radMap.cols;
 
   for (int i = 1; i < radMap.rows - 1; ++i) {
     for (int j = 1; j < radMap.cols - 1; ++j) {
@@ -166,26 +224,31 @@ vector<Point> findFeaturePoints(const Mat &radMap) {
         int top = i - 1;
         int left = j - 1;
         int length = 3;
-        // Mat dx = DX(Rect(left, top, length, length));
         bool isLarger = false;
+        bool isLess = false;
         Mat window = radMap(Rect(left, top, length, length));
         for (int u = 0; u < length; ++u) {
           for (int v = 0; v < length; ++v) {
-            if (u == 1 && v == 1) {
+            if (u == 1 && v == 1)
               continue;
-            } 
             if (window.at<float>(u, v) < window.at<float>(1, 1)) {
               isLarger = true;
-              break;
+              // break;
+            }
+            if (window.at<float>(u, v) >  window.at<float>(1, 1)) {
+              isLess = true;
+              // break;
             }
           }
         }
               
-        if (!isLarger) {
-          // If current pixel is local minimum,
-          // we should kill and delete this pixel.
+        // If current pixel is local minimum,
+        // we should kill and delete this pixel.
+        //if (!isLarger)
+        //  KillMap.at<uchar>(i, j) = 1;
+
+        if (!isLess)
           KillMap.at<uchar>(i, j) = 1;
-        }
       }    
     }
   }
@@ -200,41 +263,76 @@ vector<Point> findFeaturePoints(const Mat &radMap) {
   return pointVec;
 }
 
+void featureMatching(const vector<ImageContainer*>& images) {
+  // Current only support two images
+  ImageContainer *imageA = images[0];
+  ImageContainer *imageB = images[1];
+  
+  imageA->getMatchEdges(imageB); 
+}
+
 int main( int argc, char** argv )
 {
-/*
+
   if (argc < 4) {
     cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${NUM_OF_IMAGES}" << endl;
     return -1;
   }
-*/
-  String imageName( "../../data/grail/grail02.jpg"); // by default
 
-  Mat inImage, image;
-  inImage = imread( imageName, IMREAD_COLOR ); // Read the file
-  if(inImage.empty()) {
-    cout <<  "Could not open or find the image" << std::endl ;
-    return -1;
-  }
- 
-  Mat radMap;
-  vector<Point> pointVec;
-  inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
-  radMap = getRadianceMap(image, 2, 0.04);
-  pointVec = findFeaturePoints(radMap);
+  vector <ImageContainer*> images;
+  String imageDir(argv[1]);
+  String imagePrefix(argv[2]);
+  int numOfImages = atoi(argv[3]);
   
-  ImageContainer newImage(inImage, radMap, pointVec); 
-  inImage = newImage.getFeatureImage();
-  Mat JetColorMap = newImage.getResponseMap();
+  /*
+    Create response map and feature points for each images
+  */
+  for (int idx = 0; idx < numOfImages; ++idx) {  
+    String number(to_string(idx)); // by default
+    if (number.length() == 1)
+      number = "0" + number;
+
+    String imagePath = imageDir + "/" + imagePrefix + number + ".jpg";
+    cout << imagePath << endl;
+
+    Mat inImage, image;
+    inImage = imread(imagePath, IMREAD_COLOR); // Read the file
+    if(inImage.empty()) {
+      cout <<  "Could not open or find the image" << std::endl ;
+      return -1;
+    }
    
-  Mat outputMat, grayImage;
-  cvtColor(image, grayImage, CV_BGR2GRAY);
+    Mat radMap, Ix, Iy;
+    vector<Point> pointVec;
+    inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
+    radMap = getRadianceMap(image, Ix, Iy, 2, 0.04);
+    pointVec = findFeaturePoints(radMap);
+    ImageContainer *newImage = new ImageContainer(
+      inImage, radMap, Ix, Iy, pointVec
+    ); 
+    images.push_back(newImage);
+  }
   
-  Mat matArray[] = {JetColorMap, inImage};
-  hconcat(matArray, 2, outputMat);
+  featureMatching(images);
+  
+  Mat outputMat;
+  bool firstTime = true;
+  for (int idx = 0; idx < numOfImages; ++idx) {
+    ImageContainer *newImage = images[idx];
+    Mat FeatureImage = newImage->getFeatureImage();
+    Mat ResponseMap = newImage->getResponseMap();
+    if (firstTime) {
+      Mat matArray[] = {FeatureImage, ResponseMap};
+      hconcat(matArray, 2, outputMat);
+      firstTime = false;
+    } else {
+      hconcat(outputMat, FeatureImage, outputMat);
+      hconcat(outputMat, ResponseMap, outputMat);
+    }
+  }
 
-  // namedWindow( "Display window", CV_WINDOW_AUTOSIZE); 
-  imshow( "Display window", outputMat );
+
+  imshow( "Display window", outputMat);
   waitKey(0); // Wait for a keystroke in the window
   
   return 0;
