@@ -29,6 +29,7 @@ public:
     _Ix.copyTo(this->Ix);
     _Iy.copyTo(this->Iy);
     this->pointVec.assign(_pointVec.begin(), _pointVec.end());
+    this->patches = this->getWindowsOfFeatures();
   }
   
   Mat getImage() { return this->image; }
@@ -36,7 +37,8 @@ public:
   Mat getIx() { return this->Ix; }
   Mat getIy() { return this->Iy; }
   vector<Point> getPoints() { return this->pointVec;}
-   
+  vector<Mat> getPatches() { return this->patches; } 
+
   Mat getFeatureImage() {
     Mat newImage;
     this->image.copyTo(newImage);
@@ -44,9 +46,7 @@ public:
       Point point = pointVec[i];
       int x = point.x;
       int y = point.y;
-      newImage.at<Vec3b>(x, y)[0] = 0;
-      newImage.at<Vec3b>(x, y)[1] = 0;
-      newImage.at<Vec3b>(x, y)[2] = 255;
+      circle(newImage, Point(y, x), 5, Scalar(0, 0, 255));
     }
     return newImage; 
   }
@@ -65,7 +65,7 @@ public:
     return cmImg;
   }
   
-  vector<Mat> getWindowsOfFeatures() {
+  vector<Mat> getWindowsOfFeatures(int length=27, int blockNum=3) {
     Mat DX, DY;
     vector<Mat> windows;
     double min, max;
@@ -75,6 +75,8 @@ public:
     minMaxLoc(Ix, &min, &max);
     cout << min << " " << max << endl;
     for (int i = 0; i < this->pointVec.size(); ++i) {
+      
+      //  Compute vector rotation angle
       Point p = this->pointVec[i];
       int x = p.x, y = p.y;
       float dx = DX.at<float>(x, y);
@@ -83,17 +85,40 @@ public:
       float scale = 10.0;
       float newX = scale * dx / root;
       float newY = scale * dy / root;
-      float vec[] = {newX, newY};
-      Mat Vec(1, 2, CV_32FC1, vec);
-      cout << x << " "  << y << " " << Vec << " " << fastAtan2(newY, newX) << endl;
-      arrowedLine(this->image, Point(y, x), Point(int(newY+y), int(newX+x)), Scalar(255, 0, 0)); 
-      //circle(this->image, Point(y, x), 10, Scalar(0, 255, 0));
-
-      // normalize(Vec, Vec, 2.0, 0.0, NORM_MINMAX);
-      // minMaxLoc(Vec, &min, &max);
-      // cout << min << " " << max << endl;
+      float theta = fastAtan2(newY, newX);
+      float pi = std::acos(-1);
+      float angle = pi * theta / 180;
+      // arrowedLine(this->image, Point(y, x), Point(int(newY+y), int(newX+x)), Scalar(255, 0, 0)); 
+      
+      // Transform and fill value in pixel to window 
+      Mat window = Mat::zeros(length, length, CV_8UC3);
+      int offset = (length - 1) / 2;
+      for (int u = -offset; u <= offset; ++u)
+        for (int v = -offset; v <= offset; ++v) {
+          // Rotate and shift the point to original image
+          int origX = (int)(u * cos(angle) - v * sin(angle) + 0.5) + x;
+          int origY = (int)(u * sin(angle) + v * cos(angle) + 0.5) + y;
+          int matX = u + offset;
+          int matY = v + offset;
+          // Map current window position to origin image
+          window.at<Vec3b>(matX, matY) = this->image.at<Vec3b>(origX, origY);
+        }
+      
+      Mat patch = Mat::zeros(blockNum, blockNum, CV_8UC3);
+      int blockLength = length / blockNum;
+      for (int u = 0; u < blockNum; ++u)
+        for (int v = 0; v < blockNum; ++v) {
+          int xx = u * blockLength;
+          int yy = v * blockLength;
+          Mat block = window(Rect(xx, yy, blockLength, blockLength));
+          int numOfElemts = blockLength * blockLength;
+          uchar B = sum(block)[0] / numOfElemts;
+          uchar G = sum(block)[1] / numOfElemts;
+          uchar R = sum(block)[2] / numOfElemts;
+          patch.at<Vec3b>(u, v) = Vec3b(B, G, R);
+        }
+      windows.push_back(patch);
     }
-    
     return windows;
   }
 
@@ -103,25 +128,45 @@ public:
     // 1. Get a window of features points.
     // 2. Rotate the feature descriptor to up.
     // 3. Slice blocks of the images. 
-    this->getWindowsOfFeatures(); 
-    otherImage->getWindowsOfFeatures();
+    vector <Mat> patchA = this->getPatches();
+    vector <Mat> patchB = otherImage->getPatches();
+    while (patchA.size() != patchB.size())
+      if (patchA.size() > patchB.size())
+        patchB.push_back(patchA[0]);
+      else 
+        patchA.push_back(patchB[0]);
+    
+     
+    Mat outA, outB, output;
+    Mat *arrayA = patchA.data();
+    Mat *arrayB = patchB.data();
+    hconcat(arrayA, patchA.size(), outA);
+    hconcat(arrayB, patchB.size(), outB);
+
+    Mat combine[] = {outA, outB};
+    vconcat(combine, 2, output);
+    
+    imshow("Combine concat", output);
+    waitKey(0); 
   }
   
 private:
   Mat image;
   Mat radMap;
   Mat Ix, Iy;
-  vector<Point>pointVec;
+  vector<Point> pointVec;
+  vector<Mat> patches;
 };
 
 Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.05) {
   Mat radMap, grayImage;
   cvtColor(image, grayImage, CV_BGR2GRAY);
   grayImage.copyTo(radMap);
+ 
+  uchar a[3][3] = {{128,253,134},{4,5,6},{7,8,9}};
+  Mat A(3, 3, CV_8UC1, a);
+  // cout << "SUM: " << sum(A)[0] << endl; 
   
-  float a[3][3] = {{1,2,3},{4,5,6},{7,8,9}};
-  Mat A(3, 3, CV_32FC1, a);
-
   /*
     Create dx, dy of images by using gaussian blur to reduce noise,
     and exploit convolution to calculate dx and dy.  
@@ -208,18 +253,18 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
 vector<Point> findFeaturePoints(Mat &radMap) {
   double min, max, average;
   vector<Point> pointVec;
+  // Current KillMap is used to record local maximum
   Mat KillMap = Mat::zeros(radMap.rows, radMap.cols, CV_8UC1); 
   normalize(radMap, radMap, 1.0, 0.0, NORM_MINMAX);
   minMaxLoc(radMap, &min, &max);
   cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
-  float threshold = 1.6 * sumOfRadmap / radMap.rows / radMap.cols;
+  float threshold = 1.8 * sumOfRadmap / radMap.rows / radMap.cols;
 
   for (int i = 1; i < radMap.rows - 1; ++i) {
     for (int j = 1; j < radMap.cols - 1; ++j) {
       if (radMap.at<float>(i, j) > threshold) {
-        // If value in other pixel is lager than one in current pixel,
-        // kill current pixel
+        // Find local maximum in the middle of window
         float wMin, wMax;
         int top = i - 1;
         int left = j - 1;
@@ -241,12 +286,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
             }
           }
         }
-              
-        // If current pixel is local minimum,
-        // we should kill and delete this pixel.
-        //if (!isLarger)
-        //  KillMap.at<uchar>(i, j) = 1;
-
+        
         if (!isLess)
           KillMap.at<uchar>(i, j) = 1;
       }    
@@ -274,20 +314,21 @@ void featureMatching(const vector<ImageContainer*>& images) {
 int main( int argc, char** argv )
 {
 
-  if (argc < 4) {
-    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${NUM_OF_IMAGES}" << endl;
+  if (argc < 5) {
+    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${START_NUM} ${END_NUM}" << endl;
     return -1;
   }
 
   vector <ImageContainer*> images;
   String imageDir(argv[1]);
   String imagePrefix(argv[2]);
-  int numOfImages = atoi(argv[3]);
+  int startNumber = atoi(argv[3]);
+  int endNumber = atoi(argv[4]);
   
   /*
     Create response map and feature points for each images
   */
-  for (int idx = 0; idx < numOfImages; ++idx) {  
+  for (int idx = startNumber; idx < endNumber; ++idx) {  
     String number(to_string(idx)); // by default
     if (number.length() == 1)
       number = "0" + number;
@@ -317,7 +358,7 @@ int main( int argc, char** argv )
   
   Mat outputMat;
   bool firstTime = true;
-  for (int idx = 0; idx < numOfImages; ++idx) {
+  for (int idx = 0; idx < images.size(); ++idx) {
     ImageContainer *newImage = images[idx];
     Mat FeatureImage = newImage->getFeatureImage();
     Mat ResponseMap = newImage->getResponseMap();
