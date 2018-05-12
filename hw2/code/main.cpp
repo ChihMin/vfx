@@ -15,10 +15,15 @@
 using namespace cv;
 using namespace std;
 
+#define PI std::acos(-1) 
+
 #define LENGTH 27
 #define BLOCK_NUM 27
 #define ERROR_RATE 15
 #define THRESHOLD_SCALE 1.2
+
+#define ANGLE_THRESHOLD cos(5*PI/180)
+#define LENGTH_THRESHOLD 0.1
 
 class ImageContainer {
 public:
@@ -170,21 +175,6 @@ public:
     vector <Mat> patchB = otherImage->getPatches();
     vector <Point> pointA = this->getPoints();
     vector <Point> pointB = otherImage->getPoints();
-  /* 
-    Mat AA, BB, output;
-    while(patchA.size() != patchB.size()) {
-      if (patchA.size() > patchB.size())
-        patchB.push_back(patchA[0]);
-      else
-        patchA.push_back(patchB[0]);
-    }
-    hconcat(patchA.data(), patchA.size(), AA);
-    hconcat(patchB.data(), patchB.size(), BB);
-    
-    vconcat(AA, BB, output);
-    imshow("hahah", output);
-    waitKey(0);
-  */
     
     // A lambda function for patches convertion
     auto trainDataCvt = [](const vector<Mat>& patchList, 
@@ -206,7 +196,8 @@ public:
       return dataSet;
     };
     
-    auto matchFeatures = [](const pair<Mat, Mat>& A, const pair<Mat, Mat>& B) -> map<int, int> {
+    auto matchFeatures = [](const pair<Mat, Mat>& A, 
+                            const pair<Mat, Mat>& B) -> map<int, int> {
       Mat matchB2A, matchA2B;
       map <int, int> matchTable, B2ATable, A2BTable;
       int knnLevel = 2;
@@ -246,9 +237,7 @@ public:
     ASet = trainDataCvt(patchA, totalBlock);
     BSet = trainDataCvt(patchB, totalBlock);
     
-    /*
-      table format = [Label B] --> Label A
-    */ 
+    // table format = [Label B] --> Label A
     map <int, int> matchTable = matchFeatures(ASet, BSet); 
     map <int, int>::iterator it;
     
@@ -257,7 +246,8 @@ public:
     Mat matArray[] = { imageA, imageB };
     Mat outputMat;
     hconcat(matArray, 2, outputMat);
-    
+    vector<pair<Point, Point>> lines;
+     
     for (it = matchTable.begin(); it != matchTable.end(); ++it) {
       int labelB = it->first;
       int labelA = it->second;
@@ -275,12 +265,52 @@ public:
       subtract(MatA, MatB, MatDiff);
       multiply(MatDiff, MatDiff, MatDiff);
       float error = sum(MatDiff)[0]; 
-      cout << "error rate = " << error << endl; 
+      // cout << "error rate = " << error << endl; 
       
-      if (error < ERROR_RATE) 
-        line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0)); 
+      if (error < ERROR_RATE) {
+        line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 2); 
+        lines.push_back(pair<Point, Point>(Point(Ax, Ay), Point(Bx, pointB[labelB].y)));
+      }
     }
     
+    map<int, vector<pair<Point, Point>>> vectorTable;
+    int maxMatchIdx = 0;
+    int maxMatchPoints = 0;
+    for (int i = 0; i < lines.size(); ++i) {
+      vectorTable[i] = vector<pair<Point, Point>>();
+      for (int j = 0; j < lines.size(); ++j) {
+        // vector A - B
+        float ux = lines[i].first.x - lines[i].second.x;
+        float uy = lines[i].first.y - lines[i].second.y;
+        
+        float vx = lines[j].first.x - lines[j].second.x;
+        float vy = lines[j].first.y - lines[j].second.y;
+        
+        float uu = sqrt(ux * ux + uy * uy);
+        float vv = sqrt(vx * vx + vy * vy);
+        float dot = ux * vx + uy * vy;
+        float cosTheta = dot / (uu * vv);
+        float diff = sqrt((uu - vv) * (uu - vv)) / uu;
+        
+        if (cosTheta >= ANGLE_THRESHOLD && diff <= LENGTH_THRESHOLD)
+          vectorTable[i].push_back(lines[j]);
+      }
+      
+      int numOfPoints = vectorTable[i].size();
+      if (numOfPoints > maxMatchPoints) {
+        maxMatchIdx = i;
+        maxMatchPoints = numOfPoints;
+      }
+    }
+    
+    vector<pair<Point, Point>> maxMatch = vectorTable[maxMatchIdx];
+    vector<pair<Point, Point>>::iterator matchIt;
+    for (matchIt = maxMatch.begin(); matchIt != maxMatch.end(); ++matchIt) {
+      Point A = matchIt->first;
+      Point B = matchIt->second;
+      line(outputMat, Point(A.y, A.x), Point(B.y + imageA.cols, B.x), Scalar(255, 0, 0)); 
+    }
+     
     imshow("Window", outputMat);
     waitKey(0);
   }
