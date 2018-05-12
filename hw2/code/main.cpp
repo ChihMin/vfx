@@ -3,6 +3,8 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
+#include <opencv2/flann.hpp>
+#include <opencv2/ml.hpp>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -12,6 +14,10 @@
 
 using namespace cv;
 using namespace std;
+
+#define LENGTH 27
+#define BLOCK_NUM 9
+#define ERROR_RATE 1
 
 class ImageContainer {
 public:
@@ -65,7 +71,7 @@ public:
     return cmImg;
   }
   
-  vector<Mat> getWindowsOfFeatures(int length=27, int blockNum=3) {
+  vector<Mat> getWindowsOfFeatures(int length=LENGTH, int blockNum=BLOCK_NUM) {
     Mat DX, DY;
     vector<Mat> windows;
     double min, max;
@@ -110,7 +116,9 @@ public:
         for (int v = 0; v < blockNum; ++v) {
           int xx = u * blockLength;
           int yy = v * blockLength;
-          Mat block = window(Rect(xx, yy, blockLength, blockLength));
+
+          // Maybe here shold be modified for capture the features
+          Mat block = window(Rect(yy, xx, blockLength, blockLength));
           int numOfElemts = blockLength * blockLength;
           uchar B = sum(block)[0] / numOfElemts;
           uchar G = sum(block)[1] / numOfElemts;
@@ -119,7 +127,31 @@ public:
         }
       windows.push_back(patch);
     }
+    
     return windows;
+  }
+  
+  string type2str(int type) {
+	string r;
+
+	uchar depth = type & CV_MAT_DEPTH_MASK;
+	uchar chans = 1 + (type >> CV_CN_SHIFT);
+
+	switch ( depth ) {
+	  case CV_8U:  r = "8U"; break;
+	  case CV_8S:  r = "8S"; break;
+	  case CV_16U: r = "16U"; break;
+	  case CV_16S: r = "16S"; break;
+	  case CV_32S: r = "32S"; break;
+	  case CV_32F: r = "32F"; break;
+	  case CV_64F: r = "64F"; break;
+	  default:     r = "User"; break;
+	}
+
+	r += "C";
+	r += (chans+'0');
+
+	return r;
   }
 
   void getMatchEdges(ImageContainer *otherImage) {
@@ -127,27 +159,147 @@ public:
     // Below is algorithm:
     // 1. Get a window of features points.
     // 2. Rotate the feature descriptor to up.
-    // 3. Slice blocks of the images. 
+    // 3. Slice blocks of the images.
+    // 4. Use kdtree to find the matching of patches
+    int length = LENGTH;
+    int blockNum = BLOCK_NUM;
+    int totalBlock = blockNum * blockNum;
     vector <Mat> patchA = this->getPatches();
     vector <Mat> patchB = otherImage->getPatches();
-    while (patchA.size() != patchB.size())
+    vector <Point> pointA = this->getPoints();
+    vector <Point> pointB = otherImage->getPoints();
+  /* 
+    Mat AA, BB, output;
+    while(patchA.size() != patchB.size()) {
       if (patchA.size() > patchB.size())
         patchB.push_back(patchA[0]);
-      else 
+      else
         patchA.push_back(patchB[0]);
+    }
+    hconcat(patchA.data(), patchA.size(), AA);
+    hconcat(patchB.data(), patchB.size(), BB);
     
-     
-    Mat outA, outB, output;
-    Mat *arrayA = patchA.data();
-    Mat *arrayB = patchB.data();
-    hconcat(arrayA, patchA.size(), outA);
-    hconcat(arrayB, patchB.size(), outB);
+    vconcat(AA, BB, output);
+    imshow("hahah", output);
+    waitKey(0);
+  */
+    
+    // A lambda function for patches convertion
+    auto trainDataCvt = [](const vector<Mat>& patchList, 
+                           int totalBlock) -> pair<Mat, Mat> {
+      Mat Data(patchList.size(), totalBlock, CV_32FC1);
+      Mat Labels(patchList.size(), 1, CV_32SC1);
+      for (int idx = 0; idx < patchList.size(); ++idx) {
+        Mat patch;
+        cvtColor(patchList[idx], patch, CV_BGR2GRAY);
+        Labels.at<int>(idx, 0) = idx;
+        // Copy all features to train data matrix
+        for (int i = 0; i < patch.rows; ++i)
+          for (int j = 0; j < patch.cols; ++j) {
+            int curPos = i * patch.rows + j;
+            Data.at<float>(idx, curPos) = patch.at<uchar>(i, j);
+          }
+      }
+      pair<Mat, Mat> dataSet(Data, Labels);
+      return dataSet;
+    };
+    
+    auto matchFeatures = [](const pair<Mat, Mat>& A, const pair<Mat, Mat>& B) -> map<int, int> {
+      Mat matchB2A, matchA2B;
+      map <int, int> matchTable, B2ATable, A2BTable;
+      int knnLevel = 2;
+      
+      Ptr<ml::KNearest> knn = ml::KNearest::create();
+      knn->train(A.first, ml::ROW_SAMPLE, A.second);
+      knn->findNearest(B.first, knnLevel, matchB2A); 
+      for (int i = 0; i < matchB2A.rows; ++i) {
+        // Create Label B to Label A Table
+        int labelB = i;
+        int labelA = matchB2A.at<float>(i, 0);
+        B2ATable[labelB] = labelA; 
+      }
 
-    Mat combine[] = {outA, outB};
-    vconcat(combine, 2, output);
+      knn = ml::KNearest::create();
+      knn->train(B.first, ml::ROW_SAMPLE, B.second);
+      knn->findNearest(A.first, knnLevel, matchA2B); 
+      for (int i = 0; i < matchA2B.rows; ++i) {
+        // Create Label A to Label B table
+        int labelA = i;
+        int labelB = matchA2B.at<float>(i, 0);
+        A2BTable[labelA] = labelB;
+      }
+      
+      map<int, int>::iterator it;
+      for (it = A2BTable.begin(); it != A2BTable.end(); ++it) {
+        int labelA = it->first;
+        int labelB = it->second;
+        if (B2ATable[labelB] == labelA)
+          matchTable[labelB] = labelA;
+      }
+      
+      return matchTable;
+    };
+     
+    pair <Mat, Mat> ASet, BSet;
+    ASet = trainDataCvt(patchA, totalBlock);
+    BSet = trainDataCvt(patchB, totalBlock);
     
-    imshow("Combine concat", output);
-    waitKey(0); 
+    /*
+      table format = [Label B] --> Label A
+    */ 
+    map <int, int> matchTable = matchFeatures(ASet, BSet); 
+    map <int, int>::iterator it;
+    
+    Mat imageA = this->getFeatureImage();
+    Mat imageB = otherImage->getFeatureImage();
+    Mat matArray[] = { imageA, imageB };
+    Mat outputMat;
+    hconcat(matArray, 2, outputMat);
+    
+    for (it = matchTable.begin(); it != matchTable.end(); ++it) {
+      int labelB = it->first;
+      int labelA = it->second;
+      
+      // cout << pointA[labelA] << " " << pointB[labelB] << endl; 
+      int Ax = pointA[labelA].x, Ay = pointA[labelA].y;
+      int Bx = pointB[labelB].x, By = pointB[labelB].y + imageA.cols;
+      
+      Mat MatA, MatB, MatDiff;
+      cvtColor(patchA[labelA], MatA, CV_BGR2GRAY);
+      cvtColor(patchB[labelB], MatB, CV_BGR2GRAY);
+      MatA.convertTo(MatA, CV_32F, 1.0/255, 0);
+      MatB.convertTo(MatB, CV_32F, 1.0/255, 0); 
+
+      subtract(MatA, MatB, MatDiff);
+      multiply(MatDiff, MatDiff, MatDiff);
+      float error = sum(MatDiff)[0]; 
+      cout << "error rate = " << error << endl; 
+      
+      if (error < ERROR_RATE) 
+        line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0)); 
+    }
+    // Mat trainData = dataSet.first;
+    // Mat trainLabels = dataSet.second;
+    // Mat testData = dataSet.first;
+    // Mat testLabels = dataSet.second;
+/*
+    Mat bestLabels;
+    Ptr<ml::KNearest> knn = ml::KNearest::create();
+    knn->train(trainData, ml::ROW_SAMPLE, trainLabels);
+    knn->findNearest(testData, 2, bestLabels); 
+*/   
+/*     
+    cout << "BEST LABELS: " << patchA.size() << " " << this->type2str(bestLabels.type()) << " " << bestLabels.rows << " " << patchB.size() << " " << testLabels.rows << endl;
+    for (int i = 0; i < patchB.size(); ++i) {
+      int labelIdx = bestLabels.at<float>(i, 0);
+      cout << "LABEL: " << labelIdx << endl;
+      int Ax = pointA[labelIdx].x, Ay = pointA[labelIdx].y;
+      int Bx = pointB[i].x, By = pointB[i].y + imageB.cols;
+      line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0)); 
+    }
+*/    
+    imshow("Window", outputMat);
+    waitKey(0);
   }
   
 private:
@@ -181,8 +333,8 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
   
   // Sobel only support uchar operation
   grayImage.convertTo(grayImage, CV_16S, 255, 0) ; 
-  Sobel(grayImage, DX,  -1, 1, 0, 5, scale, delta, BORDER_DEFAULT);
-  Sobel(grayImage, DY,  -1, 0, 1, 5, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DX,  -1, 1, 0, 3, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DY,  -1, 0, 1, 3, scale, delta, BORDER_DEFAULT);
   Ix = DX.clone();
   Iy = DY.clone();
   convertScaleAbs(DY, DY);
@@ -242,8 +394,6 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
     }
   }
    
-  // borderImage.convertTo(borderImage, CV_32F, 1.0/255, 0);
-  // borderImage.copyTo(radMap);
   return radMap;
 }
 
@@ -259,7 +409,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   minMaxLoc(radMap, &min, &max);
   cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
-  float threshold = 1.8 * sumOfRadmap / radMap.rows / radMap.cols;
+  float threshold = 1.2 * sumOfRadmap / radMap.rows / radMap.cols;
 
   for (int i = 1; i < radMap.rows - 1; ++i) {
     for (int j = 1; j < radMap.cols - 1; ++j) {
@@ -276,14 +426,9 @@ vector<Point> findFeaturePoints(Mat &radMap) {
           for (int v = 0; v < length; ++v) {
             if (u == 1 && v == 1)
               continue;
-            if (window.at<float>(u, v) < window.at<float>(1, 1)) {
-              isLarger = true;
-              // break;
-            }
-            if (window.at<float>(u, v) >  window.at<float>(1, 1)) {
+            
+            if (window.at<float>(u, v) >  window.at<float>(1, 1)) 
               isLess = true;
-              // break;
-            }
           }
         }
         
@@ -300,6 +445,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
       if (KillMap.at<uchar>(i, j) == 1)
         pointVec.push_back(Point(i, j));
   
+  random_shuffle(pointVec.begin(), pointVec.end()); 
   return pointVec;
 }
 
@@ -328,7 +474,7 @@ int main( int argc, char** argv )
   /*
     Create response map and feature points for each images
   */
-  for (int idx = startNumber; idx < endNumber; ++idx) {  
+  for (int idx = startNumber; idx <= endNumber; ++idx) {  
     String number(to_string(idx)); // by default
     if (number.length() == 1)
       number = "0" + number;
