@@ -16,8 +16,8 @@ using namespace cv;
 using namespace std;
 
 #define LENGTH 27
-#define BLOCK_NUM 9
-#define ERROR_RATE 1
+#define BLOCK_NUM 27
+#define ERROR_RATE 15
 
 class ImageContainer {
 public:
@@ -125,6 +125,7 @@ public:
           uchar R = sum(block)[2] / numOfElemts;
           patch.at<Vec3b>(u, v) = Vec3b(B, G, R);
         }
+      GaussianBlur(patch, patch, Size(3,3), 0, 0, BORDER_DEFAULT);
       windows.push_back(patch);
     }
     
@@ -278,26 +279,7 @@ public:
       if (error < ERROR_RATE) 
         line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0)); 
     }
-    // Mat trainData = dataSet.first;
-    // Mat trainLabels = dataSet.second;
-    // Mat testData = dataSet.first;
-    // Mat testLabels = dataSet.second;
-/*
-    Mat bestLabels;
-    Ptr<ml::KNearest> knn = ml::KNearest::create();
-    knn->train(trainData, ml::ROW_SAMPLE, trainLabels);
-    knn->findNearest(testData, 2, bestLabels); 
-*/   
-/*     
-    cout << "BEST LABELS: " << patchA.size() << " " << this->type2str(bestLabels.type()) << " " << bestLabels.rows << " " << patchB.size() << " " << testLabels.rows << endl;
-    for (int i = 0; i < patchB.size(); ++i) {
-      int labelIdx = bestLabels.at<float>(i, 0);
-      cout << "LABEL: " << labelIdx << endl;
-      int Ax = pointA[labelIdx].x, Ay = pointA[labelIdx].y;
-      int Bx = pointB[i].x, By = pointB[i].y + imageB.cols;
-      line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0)); 
-    }
-*/    
+    
     imshow("Window", outputMat);
     waitKey(0);
   }
@@ -409,7 +391,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   minMaxLoc(radMap, &min, &max);
   cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
-  float threshold = 1.2 * sumOfRadmap / radMap.rows / radMap.cols;
+  float threshold = 1.7 * sumOfRadmap / radMap.rows / radMap.cols;
 
   for (int i = 1; i < radMap.rows - 1; ++i) {
     for (int j = 1; j < radMap.cols - 1; ++j) {
