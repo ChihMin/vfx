@@ -18,6 +18,7 @@ using namespace std;
 #define LENGTH 27
 #define BLOCK_NUM 27
 #define ERROR_RATE 15
+#define THRESHOLD_SCALE 1.2
 
 class ImageContainer {
 public:
@@ -118,14 +119,14 @@ public:
           int yy = v * blockLength;
 
           // Maybe here shold be modified for capture the features
-          Mat block = window(Rect(yy, xx, blockLength, blockLength));
+          Mat block = window(Rect(xx, yy, blockLength, blockLength));
           int numOfElemts = blockLength * blockLength;
           uchar B = sum(block)[0] / numOfElemts;
           uchar G = sum(block)[1] / numOfElemts;
           uchar R = sum(block)[2] / numOfElemts;
           patch.at<Vec3b>(u, v) = Vec3b(B, G, R);
         }
-      GaussianBlur(patch, patch, Size(3,3), 0, 0, BORDER_DEFAULT);
+      // GaussianBlur(patch, patch, Size(3,3), 0, 0, BORDER_DEFAULT);
       windows.push_back(patch);
     }
     
@@ -391,7 +392,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   minMaxLoc(radMap, &min, &max);
   cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
-  float threshold = 1.7 * sumOfRadmap / radMap.rows / radMap.cols;
+  float threshold = THRESHOLD_SCALE * sumOfRadmap / radMap.rows / radMap.cols;
 
   for (int i = 1; i < radMap.rows - 1; ++i) {
     for (int j = 1; j < radMap.cols - 1; ++j) {
