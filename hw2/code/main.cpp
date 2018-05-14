@@ -17,10 +17,13 @@ using namespace std;
 
 #define PI std::acos(-1) 
 
+#define SOBEL_KERNEL_SIZE 3
 #define LENGTH 27
 #define BLOCK_NUM 27
-#define ERROR_RATE 15
-#define THRESHOLD_SCALE 1.2
+#define KNN_LEVEL 1
+#define ERROR_RATE 40
+#define THRESHOLD_SCALE 1.1
+
 
 #define ANGLE_THRESHOLD cos(5*PI/180)
 #define LENGTH_THRESHOLD 0.1
@@ -177,6 +180,7 @@ public:
     vector <Point> pointB = otherImage->getPoints();
     
     // A lambda function for patches convertion
+    // Normalize 
     auto trainDataCvt = [](const vector<Mat>& patchList, 
                            int totalBlock) -> pair<Mat, Mat> {
       Mat Data(patchList.size(), totalBlock, CV_32FC1);
@@ -184,12 +188,20 @@ public:
       for (int idx = 0; idx < patchList.size(); ++idx) {
         Mat patch;
         cvtColor(patchList[idx], patch, CV_BGR2GRAY);
+        // normalize(patch, patch, 255, 0, NORM_MINMAX);
+        patch.convertTo(patch, CV_32FC1, 1.0, 0);
+        Scalar mean, stddev;
+        meanStdDev(patch, mean, stddev);
+        subtract(patch, mean, patch);
+        divide(patch, stddev, patch);
+        // normalize(patch, patch, 255, 0, NORM_MINMAX);
+        
         Labels.at<int>(idx, 0) = idx;
         // Copy all features to train data matrix
         for (int i = 0; i < patch.rows; ++i)
           for (int j = 0; j < patch.cols; ++j) {
             int curPos = i * patch.rows + j;
-            Data.at<float>(idx, curPos) = patch.at<uchar>(i, j);
+            Data.at<float>(idx, curPos) = patch.at<float>(i, j);
           }
       }
       pair<Mat, Mat> dataSet(Data, Labels);
@@ -200,7 +212,7 @@ public:
                             const pair<Mat, Mat>& B) -> map<int, int> {
       Mat matchB2A, matchA2B;
       map <int, int> matchTable, B2ATable, A2BTable;
-      int knnLevel = 2;
+      int knnLevel = KNN_LEVEL;
       
       Ptr<ml::KNearest> knn = ml::KNearest::create();
       knn->train(A.first, ml::ROW_SAMPLE, A.second);
@@ -265,7 +277,7 @@ public:
       subtract(MatA, MatB, MatDiff);
       multiply(MatDiff, MatDiff, MatDiff);
       float error = sum(MatDiff)[0]; 
-      // cout << "error rate = " << error << endl; 
+      cout << "error rate = " << error << endl; 
       
       if (error < ERROR_RATE) {
         line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 2); 
@@ -282,10 +294,8 @@ public:
         // vector A - B
         float ux = lines[i].first.x - lines[i].second.x;
         float uy = lines[i].first.y - lines[i].second.y;
-        
         float vx = lines[j].first.x - lines[j].second.x;
         float vy = lines[j].first.y - lines[j].second.y;
-        
         float uu = sqrt(ux * ux + uy * uy);
         float vv = sqrt(vx * vx + vy * vy);
         float dot = ux * vx + uy * vy;
@@ -346,8 +356,8 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
   
   // Sobel only support uchar operation
   grayImage.convertTo(grayImage, CV_16S, 255, 0) ; 
-  Sobel(grayImage, DX,  -1, 1, 0, 3, scale, delta, BORDER_DEFAULT);
-  Sobel(grayImage, DY,  -1, 0, 1, 3, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DX,  -1, 1, 0, SOBEL_KERNEL_SIZE, scale, delta, BORDER_DEFAULT);
+  Sobel(grayImage, DY,  -1, 0, 1, SOBEL_KERNEL_SIZE, scale, delta, BORDER_DEFAULT);
   Ix = DX.clone();
   Iy = DY.clone();
   convertScaleAbs(DY, DY);
@@ -424,8 +434,8 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   float sumOfRadmap = sum(radMap)[0];
   float threshold = THRESHOLD_SCALE * sumOfRadmap / radMap.rows / radMap.cols;
 
-  for (int i = 1; i < radMap.rows - 1; ++i) {
-    for (int j = 1; j < radMap.cols - 1; ++j) {
+  for (int i = 1; i < radMap.rows - 1; ++i)
+    for (int j = 1; j < radMap.cols - 1; ++j)
       if (radMap.at<float>(i, j) > threshold) {
         // Find local maximum in the middle of window
         float wMin, wMax;
@@ -435,21 +445,17 @@ vector<Point> findFeaturePoints(Mat &radMap) {
         bool isLarger = false;
         bool isLess = false;
         Mat window = radMap(Rect(left, top, length, length));
-        for (int u = 0; u < length; ++u) {
+        for (int u = 0; u < length; ++u) 
           for (int v = 0; v < length; ++v) {
             if (u == 1 && v == 1)
               continue;
-            
             if (window.at<float>(u, v) >  window.at<float>(1, 1)) 
               isLess = true;
           }
-        }
         
         if (!isLess)
           KillMap.at<uchar>(i, j) = 1;
       }    
-    }
-  }
   
   // Extract feature points
   pointVec.clear();
