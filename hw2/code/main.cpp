@@ -24,7 +24,6 @@ using namespace std;
 #define ERROR_RATE 40
 #define THRESHOLD_SCALE 1.1
 
-
 #define ANGLE_THRESHOLD cos(5*PI/180)
 #define LENGTH_THRESHOLD 0.1
 
@@ -483,13 +482,38 @@ int main( int argc, char** argv )
     cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${START_NUM} ${END_NUM}" << endl;
     return -1;
   }
-
+  
   vector <ImageContainer*> images;
+  map<string, float> focalTable;
+
   String imageDir(argv[1]);
   String imagePrefix(argv[2]);
+  String pano = imageDir + "/" + "pano.txt";
   int startNumber = atoi(argv[3]);
   int endNumber = atoi(argv[4]);
+  ifstream fin;
+  fin.open(pano.c_str());
   
+  auto getStringTokens = [](const string& s, char delim) -> vector<string> {
+    stringstream ss(s);
+    string item;
+    vector<string> elems;
+    while (getline(ss, item, delim)) {
+      elems.push_back(item);
+    }
+    return elems;
+  };
+
+  string filePath;
+  float focal;
+  while (!fin.eof()) {
+    fin >> filePath >> focal;
+    vector<string> tokens = getStringTokens(filePath, '\\');
+    string itemName = tokens[tokens.size() - 1];
+    focalTable[itemName] = focal;
+  }
+  
+
   /*
     Create response map and feature points for each images
   */
@@ -497,9 +521,11 @@ int main( int argc, char** argv )
     String number(to_string(idx)); // by default
     if (number.length() == 1)
       number = "0" + number;
-
+    
+    String itemName = imagePrefix + number + ".jpg";
     String imagePath = imageDir + "/" + imagePrefix + number + ".jpg";
     cout << imagePath << endl;
+    cout << itemName << " " << focalTable[itemName] << endl;
 
     Mat inImage, image;
     inImage = imread(imagePath, IMREAD_COLOR); // Read the file
@@ -507,7 +533,31 @@ int main( int argc, char** argv )
       cout <<  "Could not open or find the image" << std::endl ;
       return -1;
     }
-   
+    
+    Mat projImage = Mat::zeros(inImage.rows, inImage.cols, CV_8UC3);
+    int offsetXLBound = (inImage.cols - 1) / 2;
+    int offsetXRBound = inImage.cols - 1 - offsetXLBound;
+    int offsetYLBound = (inImage.rows - 1) / 2;
+    int offsetYRBound = inImage.rows - offsetYLBound - 1;
+    
+    float f = focalTable[itemName];
+    float S = f;
+    for (int y = -offsetYLBound; y <= offsetYRBound; ++y)
+      for (int x = -offsetXLBound; x <= offsetXRBound; ++x) {
+        float theta = fastAtan2(x, f);
+        int xx = S * tan(theta * PI / 180) + offsetXLBound + 0.5;
+        int yy = S * (y / sqrt((x*x + f*f))) + offsetYLBound + 0.5;
+        int origY = y + offsetYLBound;
+        int origX = x + offsetXLBound; 
+        // cout << projImage.cols << " " << projImage.rows << endl;
+        // cout << theta << ": " << x << " " << y <<" " << xx << " " << yy << " " << origX << " " << origY << endl;
+        // if (xx >= 0 && xx < projImage.cols && yy >= 0 && yy < projImage.rows)
+        projImage.at<Vec3b>(yy, xx) = inImage.at<Vec3b>(origY, origX);
+      }
+    imshow("proj", projImage);
+    waitKey(0);
+    inImage = projImage; 
+     
     Mat radMap, Ix, Iy;
     vector<Point> pointVec;
     inImage.convertTo(image, CV_32F, 1.0/255, 0) ; 
