@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <deque>
+#include <algorithm>
 
 using namespace cv;
 using namespace std;
@@ -525,8 +526,8 @@ StitchingType featureMatching(const vector<ImageContainer*>& images) {
           u += xx;
           v += yy;
         }
-        u /= (int)edges.size();
-        v /= (int)edges.size();
+        u = (int)((float)u / (float)edges.size() + 0.5);
+        v = (int)((float)v / (float)edges.size() + 0.5);
         uSum += u;
         vSum += v; 
         
@@ -542,7 +543,7 @@ StitchingType featureMatching(const vector<ImageContainer*>& images) {
           continue;
         
         // accumulate current vector from first image 
-        imageShiftTable[imageB] = Point(vSum, uSum); 
+        imageShiftTable[imageB] = Point(uSum, vSum); 
         inList[imageB] = true;
         imageType = imageB;
         break;
@@ -558,15 +559,13 @@ StitchingType featureMatching(const vector<ImageContainer*>& images) {
     stitchingImages.push_back(newImage->getFeatureImage());
     outputImageList.push_back(newImage);
   }
-  
+/* 
   Mat outputMat;
   Mat* imageArray = stitchingImages.data();
   hconcat(imageArray, stitchingImages.size(), outputMat);
   imwrite("output.jpg", outputMat);
   imshow("outimage", outputMat);
   waitKey(0); 
-   
-/* 
   for (auto imageA: images)
     for (auto imageB: images)
       cout  << imageA->getItemName() << " " 
@@ -575,6 +574,51 @@ StitchingType featureMatching(const vector<ImageContainer*>& images) {
 */
   return StitchingType(outputImageList, imageShiftTable);
 }
+
+void imageBlending(StitchingType& bundle) {
+  vector<ImageContainer*>& imageList =  bundle.first;
+  map<ImageContainer*, Point>& imageShiftTable = bundle.second;
+  
+  int offsetX = 0, offsetY = 0;
+  int marginX = 0, marginY = 0;
+  for (auto& elemt: imageShiftTable) {
+    ImageContainer* image = elemt.first;
+    Point shift = elemt.second;
+    offsetX = min(offsetX, shift.x);
+    offsetY = min(offsetY, shift.y);
+  }
+  
+  Mat tempImage = imageList[0]->getFeatureImage();
+  int cols = tempImage.cols;
+  int rows = tempImage.rows; 
+  for (auto image: imageList) {
+    Point shift = imageShiftTable[image];
+    int newX = shift.x - offsetX;
+    int newY = shift.y - offsetY;
+    marginX = max(marginX, newX + rows);
+    marginY = max(marginY, newY + cols); 
+  }
+  
+  cout << "[MIN Offset] " << offsetX << " " << offsetY << endl;
+  cout << "[MAX offset] " << marginX << " " << marginY << endl; 
+
+  Mat output = Mat::zeros(marginX, marginY, CV_8UC3);
+  for (auto& elemt: imageShiftTable) {
+    ImageContainer* image = elemt.first;
+    Mat imageMat = image->getImage();
+    Point shift = elemt.second;
+    int newX = shift.x - offsetX;
+    int newY = shift.y - offsetY;
+    
+    for (int i = newX; i < newX + rows; ++i)
+      for (int j = newY; j < newY + cols; ++j)
+        output.at<Vec3b>(i, j) = imageMat.at<Vec3b>(i - newX, j - newY);
+  }
+  imwrite("output.jpg", output);
+  imshow("output", output);
+  waitKey(0);
+}
+
 
 int main( int argc, char** argv )
 {
@@ -662,9 +706,8 @@ int main( int argc, char** argv )
     images.push_back(newImage);
   }
   
-  StitchingType bundle= featureMatching(images);
-  vector<ImageContainer*>& imageList =  bundle.first;
-  map<ImageContainer*, Point>& imageShiftTable = bundle.second;
-  
+  StitchingType bundle = featureMatching(images);
+  imageBlending(bundle);
+   
   return 0;
 }
