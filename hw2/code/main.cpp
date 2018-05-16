@@ -19,6 +19,7 @@ using namespace std;
 
 #define PI std::acos(-1) 
 
+#define FOCAL_SCALE 1
 #define SOBEL_KERNEL_SIZE 3
 #define LENGTH 27
 #define BLOCK_NUM 27
@@ -94,7 +95,7 @@ public:
     Ix.convertTo(DX, CV_32F, 1.0, 0);
     Iy.convertTo(DY, CV_32F, 1.0, 0); 
     minMaxLoc(Ix, &min, &max);
-    cout << min << " " << max << endl;
+    // cout << min << " " << max << endl;
     for (int i = 0; i < this->pointVec.size(); ++i) {
       
       //  Compute vector rotation angle
@@ -440,7 +441,7 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   Mat KillMap = Mat::zeros(radMap.rows, radMap.cols, CV_8UC1); 
   normalize(radMap, radMap, 1.0, 0.0, NORM_MINMAX);
   minMaxLoc(radMap, &min, &max);
-  cout << min << " " << max << endl; 
+  // cout << min << " " << max << endl; 
   float sumOfRadmap = sum(radMap)[0];
   float threshold = THRESHOLD_SCALE * sumOfRadmap / radMap.rows / radMap.cols;
 
@@ -579,6 +580,7 @@ void imageBlending(StitchingType& bundle) {
   vector<ImageContainer*>& imageList =  bundle.first;
   map<ImageContainer*, Point>& imageShiftTable = bundle.second;
   
+  // Find offset for stitching image
   int offsetX = 0, offsetY = 0;
   int marginX = 0, marginY = 0;
   for (auto& elemt: imageShiftTable) {
@@ -588,6 +590,7 @@ void imageBlending(StitchingType& bundle) {
     offsetY = min(offsetY, shift.y);
   }
   
+  // Find new margin for stitching images 
   Mat tempImage = imageList[0]->getFeatureImage();
   int cols = tempImage.cols;
   int rows = tempImage.rows; 
@@ -598,21 +601,39 @@ void imageBlending(StitchingType& bundle) {
     marginX = max(marginX, newX + rows);
     marginY = max(marginY, newY + cols); 
   }
-  
-  cout << "[MIN Offset] " << offsetX << " " << offsetY << endl;
-  cout << "[MAX offset] " << marginX << " " << marginY << endl; 
 
   Mat output = Mat::zeros(marginX, marginY, CV_8UC3);
-  for (auto& elemt: imageShiftTable) {
-    ImageContainer* image = elemt.first;
+  ImageContainer *lastImage = NULL;
+  for (auto image: imageList) {
     Mat imageMat = image->getImage();
-    Point shift = elemt.second;
+    Point shift = imageShiftTable[image];
     int newX = shift.x - offsetX;
     int newY = shift.y - offsetY;
     
     for (int i = newX; i < newX + rows; ++i)
-      for (int j = newY; j < newY + cols; ++j)
-        output.at<Vec3b>(i, j) = imageMat.at<Vec3b>(i - newX, j - newY);
+      for (int j = newY; j < newY + cols; ++j) {
+        // Do linear interpolation
+        if (!lastImage) {
+          output.at<Vec3b>(i, j) = imageMat.at<Vec3b>(i-newX, j-newY);
+          continue;
+        }
+        
+        int leftBound =  newY;
+        int rightBound = imageShiftTable[lastImage].y - offsetY + cols;
+        if (j < leftBound || j >= rightBound) {
+          output.at<Vec3b>(i, j) = imageMat.at<Vec3b>(i-newX, j-newY);
+        } else {
+          float beta = (float)(j - leftBound) / (rightBound - leftBound);
+          float alpha = 1 - beta;
+          for (int rgb = 0; rgb < 3; ++rgb) {
+            uchar summary = (uchar)(alpha * output.at<Vec3b>(i, j)[rgb]) + 
+              (uchar)(beta * imageMat.at<Vec3b>(i-newX, j-newY)[rgb]);
+            output.at<Vec3b>(i, j)[rgb] = summary;
+          }
+        }
+      }
+    
+    lastImage = image;
   }
   imwrite("output.jpg", output);
   imshow("output", output);
@@ -664,7 +685,7 @@ int main( int argc, char** argv )
   // Create response map and feature points for each images
   for (auto itemName: imageNameList) {  
     // if (idx++ == 5) break; 
-    String imagePath = imageDir + "/" + itemName; //imagePrefix + number + ".jpg";
+    String imagePath = imageDir + "/" + itemName;
     cout << imagePath << endl;
     cout << itemName << " " << focalTable[itemName] << endl;
     Mat inImage, image;
@@ -681,7 +702,7 @@ int main( int argc, char** argv )
     int offsetYRBound = inImage.rows - offsetYLBound - 1;
     
     float f = focalTable[itemName];
-    float S = f;
+    float S = FOCAL_SCALE * f;
     for (int y = -offsetYLBound; y <= offsetYRBound; ++y)
       for (int x = -offsetXLBound; x <= offsetXRBound; ++x) {
         float theta = fastAtan2(x, f);
