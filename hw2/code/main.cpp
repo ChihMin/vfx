@@ -13,6 +13,8 @@
 #include <cmath>
 #include <deque>
 #include <algorithm>
+#include <omp.h>
+#include <sys/sysinfo.h>
 
 using namespace cv;
 using namespace std;
@@ -380,54 +382,60 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
   // Convert DX DY back to float data type
   DX.convertTo(DX, CV_32F, 1.0/255, 0);
   DY.convertTo(DY, CV_32F, 1.0/255, 0);
-  radMap = Mat::zeros(image.rows, image.cols, CV_32FC1); 
-  for (int i = winSize; i < image.rows - winSize; ++i) {
-    for (int j = winSize; j < image.cols - winSize; ++j) {
-      // Calculate the window position and size in images
-      int length = winSize * 2 + 1;
-      int top = i - winSize;
-      int left = j - winSize;
-      
-      // Calculate DX and DY in current windows
-      Mat dxdx, dydy, dxdy;
-      Mat dx = DX(Rect(left, top, length, length));
-      Mat dy = DY(Rect(left, top, length, length));
-      multiply(dx, dx, dxdx);
-      multiply(dy, dy, dydy);
-      multiply(dx, dy, dxdy);
-      
-      GaussianBlur(dxdx, dxdx, Size(3,3), 0, 0, BORDER_DEFAULT);
-      GaussianBlur(dydy, dydy, Size(3,3), 0, 0, BORDER_DEFAULT);
-      GaussianBlur(dxdy, dxdy, Size(3,3), 0, 0, BORDER_DEFAULT);
+  radMap = Mat::zeros(image.rows, image.cols, CV_32FC1);
+  
+  int i, j;
+  int numOfCores = get_nprocs_conf();
+  #pragma omp parallel num_threads(16) private(i)
+  { 
+    #pragma omp for schedule(dynamic, 1)
+    for (int i = winSize; i < image.rows - winSize; ++i) {
+      for (int j = winSize; j < image.cols - winSize; ++j) {
+        // Calculate the window position and size in images
+        int length = winSize * 2 + 1;
+        int top = i - winSize;
+        int left = j - winSize;
+        
+        // Calculate DX and DY in current windows
+        Mat dxdx, dydy, dxdy;
+        Mat dx = DX(Rect(left, top, length, length));
+        Mat dy = DY(Rect(left, top, length, length));
+        multiply(dx, dx, dxdx);
+        multiply(dy, dy, dydy);
+        multiply(dx, dy, dxdy);
+        
+        GaussianBlur(dxdx, dxdx, Size(3,3), 0, 0, BORDER_DEFAULT);
+        GaussianBlur(dydy, dydy, Size(3,3), 0, 0, BORDER_DEFAULT);
+        GaussianBlur(dxdy, dxdy, Size(3,3), 0, 0, BORDER_DEFAULT);
 
-      // Sum of all DX^2, DY^2, DXDY in current window
-      float sumDx = sum(dxdx)[0];
-      float sumDy = sum(dydy)[0];
-      float sumDxDy = sum(dxdy)[0];
-      float mArray[2][2] = {{sumDx, sumDxDy}, {sumDxDy, sumDy}};       
-      
-      // Calculate eigen value of matrix
-      // Transform quadratic function of M to
-      // symmetric matrix by (M + MT)/2 
-      // Besides, find eigenvalues of symmetric matrix 'Symm' from M
-      Mat M(2, 2, CV_32FC1, mArray);
-      Mat MT, Sum, Mean(2, 2, CV_32FC1,  Scalar(2)), Symm;
-      transpose(M, MT);
-      add(M, MT, Sum);
-      divide(Sum, Mean, Symm);
-      Mat eigenValues, eigenVectors;
-      eigen(Symm, eigenValues, eigenVectors);
-      
-      // After getting eigenvalues, we can calculate R
-      float lambda1 = eigenValues.at<float>(0, 0);
-      float lambda2 = eigenValues.at<float>(1, 0);
-      float detM = lambda1 * lambda2;
-      float traceM = lambda1 + lambda2;
-      float R = detM - k * traceM * traceM; 
-      radMap.at<float>(i, j) = R;
+        // Sum of all DX^2, DY^2, DXDY in current window
+        float sumDx = sum(dxdx)[0];
+        float sumDy = sum(dydy)[0];
+        float sumDxDy = sum(dxdy)[0];
+        float mArray[2][2] = {{sumDx, sumDxDy}, {sumDxDy, sumDy}};       
+        
+        // Calculate eigen value of matrix
+        // Transform quadratic function of M to
+        // symmetric matrix by (M + MT)/2 
+        // Besides, find eigenvalues of symmetric matrix 'Symm' from M
+        Mat M(2, 2, CV_32FC1, mArray);
+        Mat MT, Sum, Mean(2, 2, CV_32FC1,  Scalar(2)), Symm;
+        transpose(M, MT);
+        add(M, MT, Sum);
+        divide(Sum, Mean, Symm);
+        Mat eigenValues, eigenVectors;
+        eigen(Symm, eigenValues, eigenVectors);
+        
+        // After getting eigenvalues, we can calculate R
+        float lambda1 = eigenValues.at<float>(0, 0);
+        float lambda2 = eigenValues.at<float>(1, 0);
+        float detM = lambda1 * lambda2;
+        float traceM = lambda1 + lambda2;
+        float R = detM - k * traceM * traceM; 
+        radMap.at<float>(i, j) = R;
+      }
     }
   }
-   
   return radMap;
 }
 
@@ -644,8 +652,8 @@ void imageBlending(StitchingType& bundle) {
 int main( int argc, char** argv )
 {
 
-  if (argc < 3) {
-    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX}" << endl;
+  if (argc < 2) {
+    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} " << endl;
     return -1;
   }
   
