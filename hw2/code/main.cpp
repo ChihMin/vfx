@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include <deque>
 
 using namespace cv;
 using namespace std;
@@ -27,6 +28,8 @@ using namespace std;
 #define ANGLE_THRESHOLD cos(5*PI/180)
 #define LENGTH_THRESHOLD 0.1
 
+typedef vector<pair<Point, Point>> EdgeType;
+
 class ImageContainer {
 public:
   ImageContainer() { }
@@ -37,13 +40,15 @@ public:
   }
   
   ImageContainer(const Mat& _image, const Mat& _radMap, 
-                 const Mat& _Ix, const Mat& _Iy, const vector<Point>& _pointVec) {
+                 const Mat& _Ix, const Mat& _Iy, 
+                 const vector<Point>& _pointVec, string _itemName) {
     _image.copyTo(this->image);
     _radMap.copyTo(this->radMap);
     _Ix.copyTo(this->Ix);
     _Iy.copyTo(this->Iy);
     this->pointVec.assign(_pointVec.begin(), _pointVec.end());
     this->patches = this->getWindowsOfFeatures();
+    this->itemName = _itemName;
   }
   
   Mat getImage() { return this->image; }
@@ -52,6 +57,7 @@ public:
   Mat getIy() { return this->Iy; }
   vector<Point> getPoints() { return this->pointVec;}
   vector<Mat> getPatches() { return this->patches; } 
+  string getItemName() { return this->itemName; }
 
   Mat getFeatureImage() {
     Mat newImage;
@@ -115,7 +121,9 @@ public:
           int matX = u + offset;
           int matY = v + offset;
           // Map current window position to origin image
-          window.at<Vec3b>(matX, matY) = this->image.at<Vec3b>(origX, origY);
+          if(origX >= 0 && origX < image.rows)
+            if (origY >= 0 && origY < image.cols)
+              window.at<Vec3b>(matX, matY) = this->image.at<Vec3b>(origX, origY);
         }
       
       Mat patch = Mat::zeros(blockNum, blockNum, CV_8UC3);
@@ -163,7 +171,7 @@ public:
 	return r;
   }
 
-  void getMatchEdges(ImageContainer *otherImage) {
+  EdgeType getMatchEdges(ImageContainer *otherImage) {
     // Retreive all features from both imageA and imageB
     // Below is algorithm:
     // 1. Get a window of features points.
@@ -183,8 +191,8 @@ public:
     auto trainDataCvt = [](const vector<Mat>& patchList, 
                            int totalBlock) -> pair<Mat, Mat> {
       Mat Data(patchList.size(), totalBlock, CV_32FC1);
-      Mat Labels(patchList.size(), 1, CV_32SC1);
-      for (int idx = 0; idx < patchList.size(); ++idx) {
+        Mat Labels(patchList.size(), 1, CV_32SC1);
+        for (int idx = 0; idx < patchList.size(); ++idx) {
         Mat patch;
         cvtColor(patchList[idx], patch, CV_BGR2GRAY);
         // normalize(patch, patch, 255, 0, NORM_MINMAX);
@@ -276,10 +284,10 @@ public:
       subtract(MatA, MatB, MatDiff);
       multiply(MatDiff, MatDiff, MatDiff);
       float error = sum(MatDiff)[0]; 
-      cout << "error rate = " << error << endl; 
+      // cout << "error rate = " << error << endl; 
       
       if (error < ERROR_RATE) {
-        line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 2); 
+        // line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 2); 
         lines.push_back(pair<Point, Point>(Point(Ax, Ay), Point(Bx, pointB[labelB].y)));
       }
     }
@@ -317,11 +325,12 @@ public:
     for (matchIt = maxMatch.begin(); matchIt != maxMatch.end(); ++matchIt) {
       Point A = matchIt->first;
       Point B = matchIt->second;
-      line(outputMat, Point(A.y, A.x), Point(B.y + imageA.cols, B.x), Scalar(255, 0, 0)); 
+      line(outputMat, Point(A.y, A.x), Point(B.y + imageA.cols, B.x), Scalar(0, 255, 0)); 
     }
      
-    imshow("Window", outputMat);
-    waitKey(0);
+    // imshow("Window", outputMat);
+    // waitKey(0);
+    return maxMatch;
   }
   
 private:
@@ -330,6 +339,7 @@ private:
   Mat Ix, Iy;
   vector<Point> pointVec;
   vector<Mat> patches;
+  string itemName;
 };
 
 Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.05) {
@@ -467,19 +477,110 @@ vector<Point> findFeaturePoints(Mat &radMap) {
   return pointVec;
 }
 
-void featureMatching(const vector<ImageContainer*>& images) {
-  // Current only support two images
-  ImageContainer *imageA = images[0];
-  ImageContainer *imageB = images[1];
+typedef pair<vector<ImageContainer*>, map<ImageContainer*, Point>> StitchingType;
+StitchingType featureMatching(const vector<ImageContainer*>& images) {
+  map<ImageContainer*, map<ImageContainer*, EdgeType>> edgeTable; 
+  int numOfImages = images.size();
   
-  imageA->getMatchEdges(imageB); 
+  // Create feature table bewteen each images
+  for (auto imageA: images) 
+    for (auto imageB: images) {
+        if (imageA == imageB) 
+          continue; 
+      
+      if (edgeTable.find(imageA) == edgeTable.end())
+        edgeTable[imageA] = map<ImageContainer*, EdgeType>();
+      edgeTable[imageA][imageB] = imageA->getMatchEdges(imageB); 
+    }
+
+  map<ImageContainer*, bool> inList;
+  deque<ImageContainer*> imageList;
+  map<ImageContainer*, Point> imageShiftTable;
+  ImageContainer *startImage = images[0];
+  imageList.push_front(startImage);
+  inList[startImage] = true;
+  
+  cout << "Start find neighborhood ... " << endl;
+  for (int STAT = 0; STAT <= 1; ++STAT) { 
+    ImageContainer* imageA = NULL;
+    ImageContainer *imageType = startImage;
+    int uSum = 0;
+    int vSum = 0;
+    while (imageA != imageType) {
+      imageA = imageType;
+      for (auto imageB: images) {
+        if (inList.find(imageB) != inList.end())
+          continue;
+
+        EdgeType& edges = edgeTable[imageA][imageB];
+        if (edges.size() <= 10)
+          continue;
+        
+        int u = 0, v = 0;
+        for (auto edge: edges) {
+          Point pointA = edge.first;
+          Point pointB = edge.second;
+          int xx = pointA.x - pointB.x;
+          int yy = pointA.y - pointB.y;
+          u += xx;
+          v += yy;
+        }
+        u /= (int)edges.size();
+        v /= (int)edges.size();
+        uSum += u;
+        vSum += v; 
+        
+        // For LHS image searching
+        // For RHS image searching
+        // There is End of Image in current seatching
+        bool hasNextImage = true;
+        if (!STAT && v < 0)
+          imageList.push_front(imageB);
+        else if (STAT && v > 0)
+          imageList.push_back(imageB);
+        else
+          continue;
+        
+        // accumulate current vector from first image 
+        imageShiftTable[imageB] = Point(vSum, uSum); 
+        inList[imageB] = true;
+        imageType = imageB;
+        break;
+      }
+    }
+  }
+  cout << "End of finding neighborhood .. " << endl;
+  vector<Mat> stitchingImages;
+  vector<ImageContainer*> outputImageList;
+  deque<ImageContainer*>::iterator it;
+  for (it = imageList.begin(); it != imageList.end(); ++it) {
+    ImageContainer *newImage = *it;
+    stitchingImages.push_back(newImage->getFeatureImage());
+    outputImageList.push_back(newImage);
+  }
+  
+  Mat outputMat;
+  Mat* imageArray = stitchingImages.data();
+  hconcat(imageArray, stitchingImages.size(), outputMat);
+  imwrite("output.jpg", outputMat);
+  imshow("outimage", outputMat);
+  waitKey(0); 
+   
+/* 
+  for (auto imageA: images)
+    for (auto imageB: images)
+      cout  << imageA->getItemName() << " " 
+            << imageB->getItemName() << " " 
+            << edgeTable[imageA][imageB].size() << endl;
+*/
+  return StitchingType(outputImageList, imageShiftTable);
 }
 
 int main( int argc, char** argv )
 {
 
-  if (argc < 5) {
-    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX} ${START_NUM} ${END_NUM}" << endl;
+  if (argc < 3) {
+    cout << "Usage: ./EXEC ${DATYA_DIRECTORY} ${IMAGE_PREFIX}" << endl;
     return -1;
   }
   
@@ -489,8 +590,6 @@ int main( int argc, char** argv )
   String imageDir(argv[1]);
   String imagePrefix(argv[2]);
   String pano = imageDir + "/" + "pano.txt";
-  int startNumber = atoi(argv[3]);
-  int endNumber = atoi(argv[4]);
   ifstream fin;
   fin.open(pano.c_str());
   
@@ -504,29 +603,26 @@ int main( int argc, char** argv )
     return elems;
   };
 
+  vector<string> imageNameList;
   string filePath;
   float focal;
+  
+  fin >> filePath >> focal;
   while (!fin.eof()) {
-    fin >> filePath >> focal;
     vector<string> tokens = getStringTokens(filePath, '\\');
     string itemName = tokens[tokens.size() - 1];
     focalTable[itemName] = focal;
+    imageNameList.push_back(itemName);
+    fin >> filePath >> focal;
   }
   
-
-  /*
-    Create response map and feature points for each images
-  */
-  for (int idx = startNumber; idx <= endNumber; ++idx) {  
-    String number(to_string(idx)); // by default
-    if (number.length() == 1)
-      number = "0" + number;
-    
-    String itemName = imagePrefix + number + ".jpg";
-    String imagePath = imageDir + "/" + imagePrefix + number + ".jpg";
+  int idx = 0;
+  // Create response map and feature points for each images
+  for (auto itemName: imageNameList) {  
+    // if (idx++ == 5) break; 
+    String imagePath = imageDir + "/" + itemName; //imagePrefix + number + ".jpg";
     cout << imagePath << endl;
     cout << itemName << " " << focalTable[itemName] << endl;
-
     Mat inImage, image;
     inImage = imread(imagePath, IMREAD_COLOR); // Read the file
     if(inImage.empty()) {
@@ -549,13 +645,10 @@ int main( int argc, char** argv )
         int yy = S * (y / sqrt((x*x + f*f))) + offsetYLBound + 0.5;
         int origY = y + offsetYLBound;
         int origX = x + offsetXLBound; 
-        // cout << projImage.cols << " " << projImage.rows << endl;
-        // cout << theta << ": " << x << " " << y <<" " << xx << " " << yy << " " << origX << " " << origY << endl;
-        // if (xx >= 0 && xx < projImage.cols && yy >= 0 && yy < projImage.rows)
         projImage.at<Vec3b>(yy, xx) = inImage.at<Vec3b>(origY, origX);
       }
-    imshow("proj", projImage);
-    waitKey(0);
+    // imshow("proj", projImage);
+    // waitKey(0);
     inImage = projImage; 
      
     Mat radMap, Ix, Iy;
@@ -564,32 +657,14 @@ int main( int argc, char** argv )
     radMap = getRadianceMap(image, Ix, Iy, 2, 0.04);
     pointVec = findFeaturePoints(radMap);
     ImageContainer *newImage = new ImageContainer(
-      inImage, radMap, Ix, Iy, pointVec
+      inImage, radMap, Ix, Iy, pointVec, itemName
     ); 
     images.push_back(newImage);
   }
   
-  featureMatching(images);
-  
-  Mat outputMat;
-  bool firstTime = true;
-  for (int idx = 0; idx < images.size(); ++idx) {
-    ImageContainer *newImage = images[idx];
-    Mat FeatureImage = newImage->getFeatureImage();
-    Mat ResponseMap = newImage->getResponseMap();
-    if (firstTime) {
-      Mat matArray[] = {FeatureImage, ResponseMap};
-      hconcat(matArray, 2, outputMat);
-      firstTime = false;
-    } else {
-      hconcat(outputMat, FeatureImage, outputMat);
-      hconcat(outputMat, ResponseMap, outputMat);
-    }
-  }
-
-
-  imshow( "Display window", outputMat);
-  waitKey(0); // Wait for a keystroke in the window
+  StitchingType bundle= featureMatching(images);
+  vector<ImageContainer*>& imageList =  bundle.first;
+  map<ImageContainer*, Point>& imageShiftTable = bundle.second;
   
   return 0;
 }
