@@ -568,19 +568,7 @@ StitchingType featureMatching(const vector<ImageContainer*>& images) {
     stitchingImages.push_back(newImage->getFeatureImage());
     outputImageList.push_back(newImage);
   }
-/* 
-  Mat outputMat;
-  Mat* imageArray = stitchingImages.data();
-  hconcat(imageArray, stitchingImages.size(), outputMat);
-  imwrite("output.jpg", outputMat);
-  imshow("outimage", outputMat);
-  waitKey(0); 
-  for (auto imageA: images)
-    for (auto imageB: images)
-      cout  << imageA->getItemName() << " " 
-            << imageB->getItemName() << " " 
-            << edgeTable[imageA][imageB].size() << endl;
-*/
+  
   return StitchingType(outputImageList, imageShiftTable);
 }
 
@@ -645,7 +633,7 @@ void imageBlending(StitchingType& bundle) {
     
     lastImage = image;
   }
-  
+
   int imageDirX = imagePosList[imagePosList.size()-1].x - imagePosList[0].x;
   int imageDirY = imagePosList[imagePosList.size()-1].y - imagePosList[0].y;
   double angle = fastAtan2(imageDirX, imageDirY);
@@ -667,7 +655,6 @@ void imageBlending(StitchingType& bundle) {
   warpAffine(output, output, rotMat, Size(output.cols, rows));
 
   imwrite("output.jpg", output);
-  // imshow("output", output);
   waitKey(0);
 }
 

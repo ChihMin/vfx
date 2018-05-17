@@ -1,0 +1,19 @@
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn00.jpg 704.916
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn01.jpg 706.286
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn02.jpg 705.849
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn03.jpg 706.645
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn04.jpg 706.587
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn05.jpg 705.645
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn06.jpg 705.327
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn07.jpg 704.696
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn08.jpg 703.794
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn09.jpg 704.325
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn10.jpg 704.696
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn11.jpg 703.895
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn12.jpg 704.289
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn13.jpg 704.676
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn14.jpg 704.847
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn15.jpg 704.537
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn16.jpg 705.102
+D:\courses\vfx\2005Spring\projects\proj#2\test_data\parrington\prtn17.jpg 705.576
+
