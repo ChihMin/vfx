@@ -51,8 +51,8 @@ public:
     _Ix.copyTo(this->Ix);
     _Iy.copyTo(this->Iy);
     this->pointVec.assign(_pointVec.begin(), _pointVec.end());
-    this->patches = this->getWindowsOfFeatures();
     this->itemName = _itemName;
+    this->patches = this->getWindowsOfFeatures();
   }
   
   Mat getImage() { return this->image; }
@@ -291,7 +291,7 @@ public:
       // cout << "error rate = " << error << endl; 
       
       if (error < ERROR_RATE) {
-        // line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 2); 
+        line(outputMat, Point(Ay, Ax), Point(By, Bx), Scalar(0, 255, 0), 1); 
         lines.push_back(pair<Point, Point>(Point(Ax, Ay), Point(Bx, pointB[labelB].y)));
       }
     }
@@ -329,7 +329,7 @@ public:
     for (matchIt = maxMatch.begin(); matchIt != maxMatch.end(); ++matchIt) {
       Point A = matchIt->first;
       Point B = matchIt->second;
-      line(outputMat, Point(A.y, A.x), Point(B.y + imageA.cols, B.x), Scalar(0, 255, 0)); 
+      line(outputMat, Point(A.y, A.x), Point(B.y + imageA.cols, B.x), Scalar(255, 0, 0), 1); 
     }
      
     // imshow("Window", outputMat);
@@ -386,7 +386,7 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
   
   int i, j;
   int numOfCores = get_nprocs_conf();
-  #pragma omp parallel num_threads(16) private(i)
+  #pragma omp parallel num_threads(numOfCores) private(i)
   { 
     #pragma omp for schedule(dynamic, 1)
     for (int i = winSize; i < image.rows - winSize; ++i) {
@@ -610,6 +610,7 @@ void imageBlending(StitchingType& bundle) {
     marginY = max(marginY, newY + cols); 
   }
 
+  vector<Point> imagePosList;
   Mat output = Mat::zeros(marginX, marginY, CV_8UC3);
   ImageContainer *lastImage = NULL;
   for (auto image: imageList) {
@@ -617,7 +618,8 @@ void imageBlending(StitchingType& bundle) {
     Point shift = imageShiftTable[image];
     int newX = shift.x - offsetX;
     int newY = shift.y - offsetY;
-    
+    imagePosList.push_back(Point(newX, newY));
+
     for (int i = newX; i < newX + rows; ++i)
       for (int j = newY; j < newY + cols; ++j) {
         // Do linear interpolation
@@ -643,8 +645,29 @@ void imageBlending(StitchingType& bundle) {
     
     lastImage = image;
   }
+  
+  int imageDirX = imagePosList[imagePosList.size()-1].x - imagePosList[0].x;
+  int imageDirY = imagePosList[imagePosList.size()-1].y - imagePosList[0].y;
+  double angle = fastAtan2(imageDirX, imageDirY);
+  Mat rotMat = getRotationMatrix2D(Point(0, 0), angle, 1);
+  
+  Point2f dstTri[4];
+  dstTri[0] = Point2f(0, 0);
+  dstTri[1] = Point2f(0, rows - 1);
+  dstTri[2] = Point2f(output.cols - 1, rows - 1);
+  dstTri[3] = Point2f(output.cols - 1, 0);
+  
+  Point2f srcTri[4];
+  srcTri[0] = Point2f(0, 0);
+  srcTri[1] = Point2f(0, rows - 1); 
+  srcTri[2] = Point2f(output.cols - 1, output.rows -1);
+  srcTri[3] = Point2f(output.cols - 1, output.rows - rows - 1);
+   
+  rotMat = getAffineTransform(srcTri, dstTri);
+  warpAffine(output, output, rotMat, Size(output.cols, rows));
+
   imwrite("output.jpg", output);
-  imshow("output", output);
+  // imshow("output", output);
   waitKey(0);
 }
 
@@ -720,8 +743,7 @@ int main( int argc, char** argv )
         int origX = x + offsetXLBound; 
         projImage.at<Vec3b>(yy, xx) = inImage.at<Vec3b>(origY, origX);
       }
-    // imshow("proj", projImage);
-    // waitKey(0);
+    
     inImage = projImage; 
      
     Mat radMap, Ix, Iy;
@@ -733,8 +755,10 @@ int main( int argc, char** argv )
       inImage, radMap, Ix, Iy, pointVec, itemName
     ); 
     images.push_back(newImage);
+    
   }
-  
+   
+  images[0]->getMatchEdges(images[1]); 
   StitchingType bundle = featureMatching(images);
   imageBlending(bundle);
    
