@@ -388,7 +388,7 @@ Mat getRadianceMap(const Mat& image, Mat& Ix, Mat& Iy, int winSize=1, float k=0.
   int numOfCores = get_nprocs_conf();
   #pragma omp parallel num_threads(numOfCores) private(i)
   { 
-    #pragma omp for schedule(dynamic, 1)
+    #pragma omp for schedule(dynamic, 10)
     for (int i = winSize; i < image.rows - winSize; ++i) {
       for (int j = winSize; j < image.cols - winSize; ++j) {
         // Calculate the window position and size in images
@@ -720,6 +720,11 @@ int main( int argc, char** argv )
     int offsetYRBound = inImage.rows - offsetYLBound - 1;
     
     float f = focalTable[itemName];
+    if (imagePath.find("scene") != string::npos) {
+      // Tune for our testcase
+      f = 1400;
+      cout << "Start tuning ... " << endl;
+    }
     float S = FOCAL_SCALE * f;
     for (int y = -offsetYLBound; y <= offsetYRBound; ++y)
       for (int x = -offsetXLBound; x <= offsetXRBound; ++x) {
