@@ -30,5 +30,8 @@ XXXXX-2.jpg focal-length-2
 # This command will emit output.jpg, which is stitching image
 # The command format: ./EXEC ${DATA_FORDER}
 
-./DisplayImage ../../data/images
+./DisplayImage ../../data/images # My firste testcase
+./DisplayImage ../../data/scene # My second testcase
+./DisplayImage ../../data/parrington # Testcase provided by TA
+./DisplayImage ../../data/grail # Testcase provided by TA
 ```
