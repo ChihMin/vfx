@@ -1,0 +1,3 @@
+/home/chihmin/vfx/hw2/code/build/CMakeFiles/edit_cache.dir
+/home/chihmin/vfx/hw2/code/build/CMakeFiles/rebuild_cache.dir
+/home/chihmin/vfx/hw2/code/build/CMakeFiles/DisplayImage.dir

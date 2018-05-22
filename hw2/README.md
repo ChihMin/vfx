@@ -1,3 +1,10 @@
+## Directory Illustration
+
+- code/
+    - main.cpp --> our code
+- data/* --> all testcases
+- output/* --> Our output result images
+
 ## Prerequest
 
 - OpenCV 3.4
